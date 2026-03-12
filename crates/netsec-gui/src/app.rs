@@ -295,7 +295,41 @@ impl NetWatch {
         })
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    fn create_webview_init_task() -> Task<Message> {
+        iced::window::get_oldest().then(|opt_id| {
+            match opt_id {
+                Some(id) => iced::window::run_with_handle(id, |handle| {
+                    use raw_window_handle::HasWindowHandle;
+                    handle.window_handle().ok().and_then(|wh| {
+                        match wh.as_raw() {
+                            raw_window_handle::RawWindowHandle::Xlib(h) => {
+                                Some(h.window as isize)
+                            }
+                            raw_window_handle::RawWindowHandle::Xcb(h) => {
+                                Some(h.window.get() as isize)
+                            }
+                            other => {
+                                tracing::warn!("Unsupported window handle type: {:?}", other);
+                                None
+                            }
+                        }
+                    })
+                }).map(|opt_handle| {
+                    match opt_handle {
+                        Some(handle) => Message::WebviewHandleReady(handle),
+                        None => Message::Tick,
+                    }
+                }),
+                None => {
+                    tracing::debug!("Window not ready yet, will retry webview init");
+                    Task::done(Message::Tick)
+                }
+            }
+        })
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     fn create_webview_init_task() -> Task<Message> {
         Task::none()
     }
@@ -1829,6 +1863,13 @@ impl NetWatch {
                 Task::none()
             }
             Message::WebviewTick => {
+                // Pump GTK events on Linux (required for webkit2gtk)
+                #[cfg(target_os = "linux")]
+                {
+                    while gtk::events_pending() {
+                        gtk::main_iteration_do(false);
+                    }
+                }
                 // Drain pending webview IPC events
                 let mut tasks = Vec::new();
                 if let Some(ref rx) = self.webview_event_rx {

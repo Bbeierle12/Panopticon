@@ -16,6 +16,8 @@ pub enum WebviewError {
     Json(#[from] serde_json::Error),
     #[error("Webview not ready")]
     NotReady,
+    #[error("{0}")]
+    Custom(String),
 }
 
 /// Manages the Wry webview for the NetworkCanvas.
@@ -82,15 +84,63 @@ impl CanvasWebview {
         })
     }
 
-    /// Create a new CanvasWebview (non-Windows platforms).
-    #[cfg(not(target_os = "windows"))]
+    /// Create a new CanvasWebview on Linux (X11).
+    #[cfg(target_os = "linux")]
     pub fn new(
-        _parent_hwnd: isize,
+        parent_xwindow: isize,
+        event_tx: mpsc::Sender<WebviewEvent>,
+    ) -> Result<Self, WebviewError> {
+        // Ensure GTK is initialized (required by webkit2gtk)
+        if gtk::init().is_err() {
+            tracing::warn!("GTK already initialized or init failed, continuing anyway");
+        }
+
+        let html_template = include_str!("../../assets/webview/index.html");
+        let widget_js = include_str!("../../assets/webview/widget.js");
+        let html_content = html_template.replace(
+            r#"<script src="./widget.js" onerror="console.warn('Widget bundle not found')"></script>"#,
+            &format!("<script>{}</script>", widget_js),
+        );
+
+        let webview = WebViewBuilder::new()
+            .with_html(&html_content)
+            .with_transparent(true)
+            .with_bounds(Rect {
+                position: LogicalPosition::new(0.0, 0.0).into(),
+                size: LogicalSize::new(800.0, 600.0).into(),
+            })
+            .with_ipc_handler(move |request| {
+                let msg_str = request.body();
+                match serde_json::from_str::<WebviewEvent>(msg_str) {
+                    Ok(event) => {
+                        if let Err(e) = event_tx.send(event) {
+                            tracing::error!("Failed to send webview event: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse webview message: {} - {}", e, msg_str);
+                    }
+                }
+            })
+            .build_as_child(&ParentWindow(parent_xwindow))?;
+
+        Ok(Self {
+            webview,
+            is_ready: false,
+            bounds: Rect {
+                position: LogicalPosition::new(0.0, 0.0).into(),
+                size: LogicalSize::new(800.0, 600.0).into(),
+            },
+        })
+    }
+
+    /// Create a new CanvasWebview (unsupported platforms).
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    pub fn new(
+        _parent_handle: isize,
         _event_tx: mpsc::Sender<WebviewEvent>,
     ) -> Result<Self, WebviewError> {
-        // For non-Windows platforms, we'll need platform-specific handling
-        // This is a placeholder that returns an error for now
-        Err(WebviewError::Wry(wry::Error::UnsupportedPlatform))
+        Err(WebviewError::Custom("Unsupported platform".into()))
     }
 
     /// Mark the webview as ready (called when we receive Ready event).
@@ -166,6 +216,22 @@ impl raw_window_handle::HasWindowHandle for ParentWindow {
         );
 
         let raw = RawWindowHandle::Win32(handle);
+        // Safety: The handle is valid for the lifetime of the parent window
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+/// Wrapper for parent window handle on Linux (X11).
+#[cfg(target_os = "linux")]
+struct ParentWindow(isize);
+
+#[cfg(target_os = "linux")]
+impl raw_window_handle::HasWindowHandle for ParentWindow {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        use raw_window_handle::{RawWindowHandle, XlibWindowHandle};
+
+        let handle = XlibWindowHandle::new(self.0 as u64);
+        let raw = RawWindowHandle::Xlib(handle);
         // Safety: The handle is valid for the lifetime of the parent window
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
     }
