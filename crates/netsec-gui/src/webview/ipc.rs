@@ -196,6 +196,8 @@ impl From<&Connection> for ConnectionJson {
 /// Complete network state serialized for React.
 #[derive(Debug, Clone, Serialize)]
 pub struct NetworkStateJson {
+    /// Monotonic sequence number for diagnosing bridge timing issues
+    pub seq: u64,
     pub nodes: Vec<NodeJson>,
     pub connections: Vec<ConnectionJson>,
     pub selected_ids: Vec<String>,
@@ -212,6 +214,7 @@ pub struct NetworkStateJson {
 impl From<&NetworkState> for NetworkStateJson {
     fn from(state: &NetworkState) -> Self {
         Self {
+            seq: 0, // Will be overwritten by sync_state_to_webview
             nodes: state.nodes.iter().map(NodeJson::from).collect(),
             connections: state.connections.iter().map(ConnectionJson::from).collect(),
             selected_ids: state.selected_ids.iter().map(|id| id.0.to_string()).collect(),

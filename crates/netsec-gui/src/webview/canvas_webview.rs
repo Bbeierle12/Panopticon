@@ -97,9 +97,22 @@ impl CanvasWebview {
 
         let html_template = include_str!("../../assets/webview/index.html");
         let widget_js = include_str!("../../assets/webview/widget.js");
-        let html_content = html_template.replace(
-            r#"<script src="./widget.js" onerror="console.warn('Widget bundle not found')"></script>"#,
-            &format!("<script>{}</script>", widget_js),
+        let needle = r#"<script src="./widget.js" onerror="console.warn('Widget bundle not found')"></script>"#;
+        let match_count = html_template.matches(needle).count();
+        tracing::info!("widget.js tag match_count={}", match_count);
+        if match_count != 1 {
+            tracing::error!("widget.js replacement needle matched {} times (expected 1)", match_count);
+        }
+
+        let html_content = html_template.replace(needle, &format!("<script>{}</script>", widget_js));
+
+        if html_content.contains(r#"src="./widget.js""#) {
+            tracing::error!("external widget.js tag still present after replacement!");
+        }
+        tracing::info!(
+            "final_html length={} contains_bundle_boot={}",
+            html_content.len(),
+            html_content.contains("__widgetBundleLoaded")
         );
 
         let webview = WebViewBuilder::new()
@@ -161,7 +174,35 @@ impl CanvasWebview {
         }
 
         let json = serde_json::to_string(state)?;
-        let script = format!("window.updateNetworkState({})", json);
+        let seq = state.seq;
+
+        // Wrap in try/catch so we can detect JS-side failures.
+        // Also log which bridge variant (placeholder vs React) receives the call.
+        let script = format!(
+            r#"(function() {{
+  var seq = {seq};
+  try {{
+    var payload = {json};
+    var fnType = typeof window.updateNetworkState;
+    console.log("[rust->js] seq=" + seq + " fn=" + fnType +
+                " nodes=" + (payload.nodes ? payload.nodes.length : "?") +
+                " conns=" + (payload.connections ? payload.connections.length : "?"));
+    if (fnType !== "function") {{
+      throw new Error("window.updateNetworkState is " + fnType);
+    }}
+    window.updateNetworkState(payload);
+    return JSON.stringify({{ ok: true, seq: seq, fnType: fnType }});
+  }} catch (e) {{
+    console.error("[rust->js] FAILED seq=" + seq, e);
+    return JSON.stringify({{
+      ok: false,
+      seq: seq,
+      err: String(e),
+      stack: e && e.stack ? e.stack : null
+    }});
+  }}
+}})()"#
+        );
 
         self.webview.evaluate_script(&script)?;
         Ok(())

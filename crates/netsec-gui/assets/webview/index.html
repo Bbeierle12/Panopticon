@@ -113,11 +113,31 @@
     </div>
 
     <script>
-      // Global state update function (called from Rust via evaluate_script)
+      // Diagnostic: track which bridge variant handles each update
+      window.__bridgeVariant = "placeholder";
+      window.__lastSeq = null;
+      window.__bridgeLog = [];
+
+      // Global state update function (called from Rust via evaluate_script).
+      // This PLACEHOLDER version buffers the latest state so React can
+      // consume it on mount, preventing lost updates from the bridge race.
       window.updateNetworkState = function(state) {
-        console.log('[Webview] Received state update:', state.nodes?.length, 'nodes');
-        // Will be overridden by React component when mounted
+        var entry = {
+          variant: window.__bridgeVariant,
+          seq: state && state.seq,
+          nodes: state && state.nodes ? state.nodes.length : 0,
+          conns: state && state.connections ? state.connections.length : 0,
+          ts: Date.now()
+        };
+        window.__bridgeLog.push(entry);
+        console.warn("[placeholder bridge]", JSON.stringify(entry));
+        // Buffer the state so React can pick it up on mount
+        window.__bufferedNetworkState = state;
+        window.__lastSeq = state && state.seq;
       };
+
+      // Boot diagnostics
+      console.log("[boot] href=", location.href, "baseURI=", document.baseURI);
 
       // Timeout to show fallback if React doesn't load
       setTimeout(function() {
@@ -128,6 +148,10 @@
         if (!root.hasChildNodes()) {
           loading.style.display = 'none';
           fallback.style.display = 'flex';
+          console.error("[boot] widget bundle not loaded after 5s");
+        }
+        if (!window.__widgetBundleLoaded) {
+          console.error("[boot] __widgetBundleLoaded is falsy");
         }
       }, 5000);
 

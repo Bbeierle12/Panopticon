@@ -138,6 +138,8 @@ pub struct NetWatch {
     webview_event_rx: Option<std::sync::mpsc::Receiver<WebviewEvent>>,
     /// Whether webview has been successfully created
     webview_initialized: bool,
+    /// Monotonic sequence number for webview state syncs (diagnostic)
+    sync_seq: u64,
     /// Current window width in logical pixels
     window_width: f64,
     /// Current window height in logical pixels
@@ -259,6 +261,7 @@ impl NetWatch {
                 webview: None,
                 webview_event_rx: None,
                 webview_initialized: false,
+                sync_seq: 0,
                 window_width: 1400.0,
                 window_height: 900.0,
             },
@@ -1797,7 +1800,11 @@ impl NetWatch {
                 })
             }
             Message::WebviewReady => {
-                tracing::info!("React NetworkCanvas webview is ready");
+                tracing::info!(
+                    "WV_READY nodes_in_state={} conns_in_state={}",
+                    self.network.nodes.len(),
+                    self.network.connections.len()
+                );
                 if let Some(ref mut wv) = self.webview {
                     wv.set_ready();
                 }
@@ -1918,19 +1925,42 @@ impl NetWatch {
     }
 
     /// Sync the current network state to the webview.
-    fn sync_state_to_webview(&self) {
+    fn sync_state_to_webview(&mut self) {
         if let Some(ref wv) = self.webview {
-            let json = NetworkStateJson::from(&self.network);
+            self.sync_seq += 1;
+            let seq = self.sync_seq;
+            let mut json = NetworkStateJson::from(&self.network);
+            json.seq = seq;
+
             tracing::info!(
-                "Syncing to webview: {} nodes, {} connections, pan=({:.0},{:.0}), zoom={:.2}",
+                "WV_SYNC seq={} ready={} nodes={} conns={} pan=({:.0},{:.0}) zoom={:.2}",
+                seq,
+                wv.is_ready(),
                 json.nodes.len(),
                 json.connections.len(),
                 json.pan.0,
                 json.pan.1,
                 json.zoom,
             );
+
+            // Log layout diagnostics on non-empty syncs
+            if !self.network.nodes.is_empty() {
+                let hub = self.network.find_hub_node();
+                let all_origin = self.network.nodes.iter().all(|n| n.x == 0.0 && n.y == 0.0);
+                tracing::info!(
+                    "WV_SYNC_LAYOUT seq={} hub={:?} all_origin={}",
+                    seq, hub, all_origin
+                );
+                for n in self.network.nodes.iter().take(3) {
+                    tracing::debug!(
+                        "  NODE {} ip={} pos=({:.1}, {:.1})",
+                        n.id.0, n.ip, n.x, n.y
+                    );
+                }
+            }
+
             if let Err(e) = wv.update_state(&json) {
-                tracing::warn!("Failed to sync state to webview: {}", e);
+                tracing::warn!("WV_SYNC_FAIL seq={} err={}", seq, e);
             }
         }
     }

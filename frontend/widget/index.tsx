@@ -11,8 +11,13 @@ import { createRoot } from 'react-dom/client';
 import { NetworkCanvas } from '../components/NetworkCanvas';
 import { Node, Connection } from '../types';
 
+// Diagnostic: mark that the bundle loaded successfully
+(window as any).__widgetBundleLoaded = true;
+console.log("[bundle boot]");
+
 // Types matching the Rust IPC protocol
 interface NetworkStateJson {
+  seq: number;
   nodes: NodeJson[];
   connections: ConnectionJson[];
   selected_ids: string[];
@@ -161,27 +166,60 @@ function NetworkCanvasWidget() {
   const [selectionBox, setSelectionBox] = useState<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
   const [dragState, setDragState] = useState<{ nodeId: string; startX: number; startY: number } | null>(null);
 
-  // Handle state updates from Rust
-  useEffect(() => {
-    // Register the update function on window for Rust to call
-    (window as any).updateNetworkState = (state: NetworkStateJson) => {
-      setNodes(state.nodes.map(jsonToNode));
-      setConnections(state.connections.map(jsonToConnection));
+  // Apply a network state update to React state
+  const applyState = useCallback((state: NetworkStateJson, source: string) => {
+    try {
+      const mapped = state.nodes.map(jsonToNode);
+      const mappedConns = state.connections.map(jsonToConnection);
+      const badCoords = mapped.filter(n => !Number.isFinite(n.x) || !Number.isFinite(n.y));
+
+      console.log(`[react bridge recv] source=${source} seq=${(state as any).seq} nodes=${mapped.length} conns=${mappedConns.length} badCoords=${badCoords.length}`);
+      if (badCoords.length > 0) {
+        console.warn("[react bridge] bad coords sample:", badCoords[0]);
+      }
+
+      setNodes(mapped);
+      setConnections(mappedConns);
       setSelectedIds(state.selected_ids);
       setHoveredConnection(state.hovered_connection);
       setPan({ x: state.pan[0], y: state.pan[1] });
       setZoom(state.zoom);
       setIsScanning(state.is_scanning);
       setScanProgress(state.scan_progress);
+      (window as any).__lastSeq = (state as any).seq;
+    } catch (e) {
+      console.error(`[react bridge] FAILED source=${source}`, e, state);
+    }
+  }, []);
+
+  // Handle state updates from Rust
+  useEffect(() => {
+    console.log("[react bridge installed]");
+    (window as any).__bridgeVariant = "react";
+
+    // Register the update function on window for Rust to call
+    (window as any).updateNetworkState = (state: NetworkStateJson) => {
+      applyState(state, "live");
     };
+
+    // Consume any state buffered by the placeholder bridge (bridge race fix)
+    const buffered = (window as any).__bufferedNetworkState;
+    if (buffered) {
+      console.log("[react bridge] consuming buffered state, seq=" + buffered.seq +
+                  " nodes=" + (buffered.nodes?.length ?? 0));
+      applyState(buffered, "buffered");
+      delete (window as any).__bufferedNetworkState;
+    }
 
     // Notify Rust that we're ready
     postToRust({ type: 'Ready' });
 
     return () => {
+      console.log("[react bridge removed]");
+      (window as any).__bridgeVariant = "none";
       delete (window as any).updateNetworkState;
     };
-  }, []);
+  }, [applyState]);
 
   // Mouse handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -288,8 +326,9 @@ function NetworkCanvasWidget() {
     <div className="relative h-full w-full bg-black overflow-hidden">
       {/* Debug overlay */}
       <div style={{ position: 'absolute', top: 4, left: 4, zIndex: 50, color: '#22d3ee', fontSize: 10, fontFamily: 'monospace', background: 'rgba(0,0,0,0.8)', padding: '2px 6px', borderRadius: 4 }}>
-        {nodes.length} nodes | {connections.length} conns | pan=({pan.x.toFixed(0)},{pan.y.toFixed(0)}) | zoom={zoom.toFixed(2)}
+        {nodes.length} nodes | {connections.length} conns | seq {(window as any).__lastSeq ?? "none"} | pan=({pan.x.toFixed(0)},{pan.y.toFixed(0)}) | zoom={zoom.toFixed(2)}
         {nodes.length > 0 && ` | first=(${nodes[0].x.toFixed(0)},${nodes[0].y.toFixed(0)})`}
+        {' | bridge='}{(window as any).__bridgeVariant ?? '?'}
       </div>
 
       {/* Scanning overlay */}
