@@ -1,13 +1,14 @@
 {
-  "name": "archangel-netmap",
+  "name": "netsec-desktop",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build",
+    "build:frontend": "vite build",
     "build:widget": "vite build --config vite.config.widget.ts",
-    "preview": "vite preview"
+    "tauri": "cargo tauri"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
