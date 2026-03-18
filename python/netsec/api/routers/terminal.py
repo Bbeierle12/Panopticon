@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
+import logging
+
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
-from netsec.core.terminal import get_terminal_manager, TerminalSession
+from netsec.core.terminal import get_terminal_manager, PING_INTERVAL
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -39,10 +42,6 @@ class TerminalSessionOut(BaseModel):
     rows: int
     created_at: datetime
 
-
-# ============================================================================
-# Pydantic Schemas for Shells
-# ============================================================================
 
 class ShellInfo(BaseModel):
     """Information about an available shell."""
@@ -74,6 +73,7 @@ async def list_available_shells() -> AvailableShellsResponse:
 async def create_terminal(body: TerminalCreateRequest) -> TerminalSessionOut:
     """Create a new terminal session."""
     manager = get_terminal_manager()
+    logger.info("Creating terminal: shell=%s cols=%d rows=%d", body.shell, body.cols, body.rows)
 
     try:
         session = await manager.create_session(
@@ -89,6 +89,7 @@ async def create_terminal(body: TerminalCreateRequest) -> TerminalSessionOut:
             created_at=session.created_at,
         )
     except RuntimeError as e:
+        logger.error("Failed to create terminal: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -138,6 +139,7 @@ async def resize_terminal(session_id: str, body: TerminalResizeRequest) -> dict:
 @router.delete("/{session_id}")
 async def delete_terminal(session_id: str) -> dict:
     """Close a terminal session."""
+    logger.info("Deleting terminal session %s", session_id)
     manager = get_terminal_manager()
     success = await manager.close_session(session_id)
     if not success:
@@ -160,11 +162,14 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
 
     Server -> Client messages:
         {"type": "output", "data": "<base64-encoded-output>"}
+        {"type": "buffered_output", "data": "<base64-encoded-output>"}
         {"type": "exit", "code": 0}
         {"type": "error", "message": "..."}
         {"type": "pong"}
+        {"type": "ping"}
     """
     await websocket.accept()
+    logger.info("WebSocket connected for session %s", session_id)
 
     manager = get_terminal_manager()
     session = await manager.get_session(session_id)
@@ -172,7 +177,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
     # If no existing session, create one
     if not session:
         try:
-            output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+            output_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=4096)
 
             def on_output(data: bytes) -> None:
                 try:
@@ -191,13 +196,15 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
                 output_callback=on_output,
                 exit_callback=on_exit,
             )
+            logger.info("Created new session %s via WebSocket", session.session_id)
         except RuntimeError as e:
+            logger.error("Failed to create session via WebSocket: %s", e)
             await websocket.send_json({"type": "error", "message": str(e)})
             await websocket.close()
             return
     else:
         # Reattach callbacks for existing session
-        output_queue = asyncio.Queue()
+        output_queue = asyncio.Queue(maxsize=4096)
 
         def on_output(data: bytes) -> None:
             try:
@@ -214,6 +221,17 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
 
         session._output_callback = on_output
         session._exit_callback = on_exit
+
+        # Replay buffered output for reconnection
+        buffer = manager.get_output_buffer(session_id)
+        if buffer:
+            logger.info("Replaying %d buffered chunks for session %s", len(buffer), session_id)
+            for chunk in buffer:
+                try:
+                    encoded = base64.b64encode(chunk).decode("ascii")
+                    await websocket.send_json({"type": "buffered_output", "data": encoded})
+                except Exception:
+                    break
 
     async def send_output() -> None:
         """Forward PTY output to WebSocket."""
@@ -237,6 +255,7 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
                 try:
                     msg = await websocket.receive_json()
                 except WebSocketDisconnect:
+                    logger.info("WebSocket disconnected for session %s", session_id)
                     break
 
                 msg_type = msg.get("type")
@@ -256,12 +275,27 @@ async def terminal_websocket(websocket: WebSocket, session_id: str) -> None:
         except Exception:
             pass
 
-    # Run both tasks concurrently
+    async def server_ping() -> None:
+        """Server-side keep-alive ping to prevent proxy/LB timeout."""
+        try:
+            while True:
+                await asyncio.sleep(PING_INTERVAL)
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    # Run all tasks concurrently
     output_task = asyncio.create_task(send_output())
     input_task = asyncio.create_task(receive_input())
+    ping_task = asyncio.create_task(server_ping())
 
     try:
         await asyncio.gather(output_task, input_task, return_exceptions=True)
     finally:
         output_task.cancel()
         input_task.cancel()
+        ping_task.cancel()
+        logger.info("WebSocket closed for session %s", session_id)

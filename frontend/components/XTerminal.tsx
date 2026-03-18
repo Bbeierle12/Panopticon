@@ -9,8 +9,10 @@ import { RefreshCw } from 'lucide-react';
 const API_ORIGIN = (import.meta.env.VITE_NETSEC_API_ORIGIN as string | undefined)?.replace(/\/$/, '') || 'http://127.0.0.1:8420';
 const API_BASE = `${API_ORIGIN}/api`;
 const WS_BASE = (import.meta.env.VITE_NETSEC_WS_URL as string | undefined)?.replace(/\/ws$/, '') || API_ORIGIN.replace(/^http/, 'ws');
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_DELAY_MS = 2000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RESIZE_DEBOUNCE_MS = 150;
+const CLIENT_PING_INTERVAL_MS = 5000;
 
 interface XTerminalProps {
   tabId: string;
@@ -34,8 +36,37 @@ export const XTerminal: React.FC<XTerminalProps> = ({
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const isCreatingSessionRef = useRef(false);
+  const resizeTimerRef = useRef<number | null>(null);
+  const pingIntervalRef = useRef<number | null>(null);
 
   const [connectionFailed, setConnectionFailed] = useState(false);
+
+  // Debounced resize — avoids hammering the backend and FitAddon width-collapse bug
+  const debouncedResize = useCallback(() => {
+    if (resizeTimerRef.current) {
+      clearTimeout(resizeTimerRef.current);
+    }
+    resizeTimerRef.current = window.setTimeout(() => {
+      const fit = fitAddonRef.current;
+      const term = xtermRef.current;
+      if (!fit || !term) return;
+
+      // Guard against zero-dimension containers (FitAddon returns undefined)
+      const dims = fit.proposeDimensions();
+      if (!dims || dims.cols < 2 || dims.rows < 1) return;
+
+      fit.fit();
+
+      // Send resize to backend only if WS is open
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'resize',
+          cols: term.cols,
+          rows: term.rows,
+        }));
+      }
+    }, RESIZE_DEBOUNCE_MS);
+  }, []);
 
   // Create a new terminal session
   const createSession = useCallback(async () => {
@@ -45,7 +76,7 @@ export const XTerminal: React.FC<XTerminalProps> = ({
     onStateChange('creating');
 
     try {
-      const response = await fetch(`${API_BASE}/terminal`, {
+      const response = await fetch(`${API_BASE}/terminal/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shell: shell?.path || null }),
@@ -103,7 +134,7 @@ export const XTerminal: React.FC<XTerminalProps> = ({
         brightWhite: '#f8fafc',
       },
       allowProposedApi: true,
-      scrollback: 5000,
+      scrollback: 10000,
     });
 
     const fitAddon = new FitAddon();
@@ -113,25 +144,35 @@ export const XTerminal: React.FC<XTerminalProps> = ({
     term.loadAddon(webLinksAddon);
 
     term.open(terminalRef.current);
-    fitAddon.fit();
+
+    // Delay first fit() to ensure DOM is laid out
+    requestAnimationFrame(() => {
+      const dims = fitAddon.proposeDimensions();
+      if (dims && dims.cols >= 2 && dims.rows >= 1) {
+        fitAddon.fit();
+      }
+    });
+
+    // Explicit focus so keyboard input works immediately
+    term.focus();
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
     // Welcome message
     term.writeln('\x1b[36m╔══════════════════════════════════════╗\x1b[0m');
-    term.writeln('\x1b[36m║\x1b[0m   \x1b[1;32mNetWatch Terminal\x1b[0m                 \x1b[36m║\x1b[0m');
+    term.writeln('\x1b[36m║\x1b[0m   \x1b[1;32mPanopticon Terminal\x1b[0m               \x1b[36m║\x1b[0m');
     term.writeln('\x1b[36m╚══════════════════════════════════════╝\x1b[0m');
     term.writeln('');
 
     if (shell) {
-      term.writeln(`\x1b[90mShell: ${shell.name}\x1b[0m`);
+      term.writeln(`\x1b[90mShell: ${shell.name} (${shell.path})\x1b[0m`);
       term.writeln('');
     }
 
     // Create session if we don't have one
     if (!sessionId) {
-      term.writeln('\x1b[33mConnecting to terminal server...\x1b[0m');
+      term.writeln('\x1b[33mConnecting...\x1b[0m');
       createSession();
     }
 
@@ -142,37 +183,21 @@ export const XTerminal: React.FC<XTerminalProps> = ({
     };
   }, [tabId]); // Only reinitialize on tabId change
 
-  // Handle resize
+  // Handle resize with debouncing
   useEffect(() => {
-    const handleResize = () => {
-      if (fitAddonRef.current && xtermRef.current) {
-        fitAddonRef.current.fit();
+    window.addEventListener('resize', debouncedResize);
 
-        // Send resize to backend
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          const { cols, rows } = xtermRef.current;
-          wsRef.current.send(JSON.stringify({
-            type: 'resize',
-            cols,
-            rows
-          }));
-        }
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-
-    // Also observe the container for size changes
-    const observer = new ResizeObserver(handleResize);
+    const observer = new ResizeObserver(debouncedResize);
     if (terminalRef.current) {
       observer.observe(terminalRef.current);
     }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', debouncedResize);
       observer.disconnect();
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
     };
-  }, []);
+  }, [debouncedResize]);
 
   // Manual reconnect handler
   const handleManualReconnect = useCallback(() => {
@@ -187,6 +212,10 @@ export const XTerminal: React.FC<XTerminalProps> = ({
     createSession();
   }, [createSession]);
 
+  // Stable refs for callbacks to avoid effect re-triggers
+  const onStateChangeRef = useRef(onStateChange);
+  onStateChangeRef.current = onStateChange;
+
   // Connect to WebSocket when sessionId is available
   useEffect(() => {
     if (!sessionId || !xtermRef.current) return;
@@ -200,16 +229,30 @@ export const XTerminal: React.FC<XTerminalProps> = ({
       ws.onopen = () => {
         reconnectAttemptsRef.current = 0;
         setConnectionFailed(false);
-        onStateChange('connected');
-        term.writeln('\x1b[32mConnected to shell.\x1b[0m');
+        onStateChangeRef.current('connected');
+        term.writeln('\x1b[32mConnected.\x1b[0m');
         term.writeln('');
 
-        // Send initial resize
-        if (fitAddonRef.current) {
-          fitAddonRef.current.fit();
-          const { cols, rows } = term;
-          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-        }
+        // Focus terminal on connect
+        term.focus();
+
+        // Send initial resize after connection is open
+        requestAnimationFrame(() => {
+          if (fitAddonRef.current) {
+            const dims = fitAddonRef.current.proposeDimensions();
+            if (dims && dims.cols >= 2 && dims.rows >= 1) {
+              fitAddonRef.current.fit();
+              ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+            }
+          }
+        });
+
+        // Start client-side ping keep-alive
+        pingIntervalRef.current = window.setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, CLIENT_PING_INTERVAL_MS);
       };
 
       ws.onmessage = (event) => {
@@ -218,20 +261,23 @@ export const XTerminal: React.FC<XTerminalProps> = ({
 
           switch (msg.type) {
             case 'output':
+            case 'buffered_output': {
               // Decode base64 output and write to terminal
-              const output = atob(msg.data);
-              term.write(output);
+              const bytes = atob(msg.data);
+              term.write(bytes);
               break;
+            }
             case 'exit':
               term.writeln('');
               term.writeln(`\x1b[33mProcess exited with code ${msg.code}\x1b[0m`);
-              onStateChange('disconnected');
+              onStateChangeRef.current('disconnected');
               break;
             case 'error':
               term.writeln(`\x1b[31mError: ${msg.message}\x1b[0m`);
               break;
             case 'pong':
-              // Heartbeat response, ignore
+            case 'ping':
+              // Keep-alive, ignore
               break;
           }
         } catch (e) {
@@ -241,15 +287,21 @@ export const XTerminal: React.FC<XTerminalProps> = ({
       };
 
       ws.onclose = () => {
-        term.writeln('');
-        term.writeln('\x1b[33mDisconnected from shell.\x1b[0m');
-        onStateChange('disconnected');
+        // Stop ping
+        if (pingIntervalRef.current) {
+          clearInterval(pingIntervalRef.current);
+          pingIntervalRef.current = null;
+        }
 
-        // Check retry limit
+        term.writeln('');
+        term.writeln('\x1b[33mDisconnected.\x1b[0m');
+        onStateChangeRef.current('disconnected');
+
+        // Exponential backoff reconnection
         if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current++;
-          const delay = RECONNECT_DELAY_MS * reconnectAttemptsRef.current;
-          term.writeln(`\x1b[36mReconnecting in ${delay / 1000}s... (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})\x1b[0m`);
+          const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttemptsRef.current - 1);
+          term.writeln(`\x1b[90mReconnecting in ${(delay / 1000).toFixed(1)}s... (${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})\x1b[0m`);
 
           reconnectTimeoutRef.current = window.setTimeout(() => {
             connect();
@@ -259,12 +311,12 @@ export const XTerminal: React.FC<XTerminalProps> = ({
           term.writeln('\x1b[31mConnection failed after maximum retries.\x1b[0m');
           term.writeln('\x1b[90mClick the reconnect button to try again.\x1b[0m');
           setConnectionFailed(true);
-          onStateChange('error');
+          onStateChangeRef.current('error');
         }
       };
 
       ws.onerror = () => {
-        term.writeln('\x1b[31mConnection error.\x1b[0m');
+        // onclose will fire after this — avoid duplicate messages
       };
     };
 
@@ -275,7 +327,7 @@ export const XTerminal: React.FC<XTerminalProps> = ({
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
           type: 'input',
-          data: btoa(data) // base64 encode input
+          data: btoa(data), // base64 encode input
         }));
       }
     });
@@ -285,22 +337,30 @@ export const XTerminal: React.FC<XTerminalProps> = ({
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [sessionId, onStateChange]);
+  }, [sessionId]);
 
-  // Trigger fit when session becomes available
+  // Re-fit when session becomes available (with guard)
   useEffect(() => {
     if (sessionId && fitAddonRef.current) {
-      setTimeout(() => fitAddonRef.current?.fit(), 100);
+      requestAnimationFrame(() => {
+        const dims = fitAddonRef.current?.proposeDimensions();
+        if (dims && dims.cols >= 2 && dims.rows >= 1) {
+          fitAddonRef.current?.fit();
+        }
+      });
     }
   }, [sessionId]);
 
   return (
-    <div className="h-full w-full relative">
+    <div className="h-full w-full relative" onClick={() => xtermRef.current?.focus()}>
       <div
         ref={terminalRef}
         className="h-full w-full bg-[#0a0a0a]"

@@ -201,9 +201,10 @@ pub struct AlertUpdate {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlertStats {
     pub total: i32,
-    pub by_severity: HashMap<String, i32>,
-    pub by_status: HashMap<String, i32>,
-    pub recent_24h: i32,
+    #[serde(alias = "by_severity")]
+    pub open_by_severity: HashMap<String, i32>,
+    #[serde(alias = "by_status")]
+    pub open_by_tool: HashMap<String, i32>,
 }
 
 // ============================================================================

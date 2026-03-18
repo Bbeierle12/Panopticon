@@ -228,12 +228,27 @@ def create_app() -> FastAPI:
     if _FRONTEND_DIR.is_dir():
         app.mount("/assets", StaticFiles(directory=_FRONTEND_DIR / "assets"), name="static")
 
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def _spa_fallback(full_path: str) -> FileResponse:
-            """Serve index.html for all non-API routes (SPA client-side routing)."""
-            file = _FRONTEND_DIR / full_path
-            if file.is_file():
-                return FileResponse(file)
-            return FileResponse(_FRONTEND_DIR / "index.html")
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.requests import Request as StarletteRequest
+        from starlette.responses import Response
+
+        _API_PREFIXES = ("/api/", "/ws", "/docs", "/openapi", "/redoc")
+        _index_html = _FRONTEND_DIR / "index.html"
+
+        class SPAFallbackMiddleware(BaseHTTPMiddleware):
+            """Serve index.html for non-API GET requests that don't match a route."""
+
+            async def dispatch(self, request: StarletteRequest, call_next) -> Response:
+                response = await call_next(request)
+                # Only intercept 404s for GET requests to non-API paths
+                if (
+                    response.status_code == 404
+                    and request.method == "GET"
+                    and not any(request.url.path.startswith(p) for p in _API_PREFIXES)
+                ):
+                    return FileResponse(_index_html)
+                return response
+
+        app.add_middleware(SPAFallbackMiddleware)
 
     return app

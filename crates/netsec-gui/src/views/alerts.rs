@@ -513,10 +513,10 @@ fn alert_detail(alert: &Alert) -> Element<'_, Message> {
 fn stats_bar<'a>(stats: Option<&'a AlertStats>, total: usize) -> Element<'a, Message> {
     let (critical, high, medium, low) = if let Some(s) = stats {
         (
-            s.by_severity.get("critical").copied().unwrap_or(0),
-            s.by_severity.get("high").copied().unwrap_or(0),
-            s.by_severity.get("medium").copied().unwrap_or(0),
-            s.by_severity.get("low").copied().unwrap_or(0),
+            s.open_by_severity.get("critical").copied().unwrap_or(0),
+            s.open_by_severity.get("high").copied().unwrap_or(0),
+            s.open_by_severity.get("medium").copied().unwrap_or(0),
+            s.open_by_severity.get("low").copied().unwrap_or(0),
         )
     } else {
         (0, 0, 0, 0)

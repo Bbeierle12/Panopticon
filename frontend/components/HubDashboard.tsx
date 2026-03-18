@@ -8,6 +8,7 @@ import {
   ScrollText,
   Settings,
   LayoutGrid,
+  Terminal,
 } from 'lucide-react';
 import { AppModule, HubStatus } from '../types';
 import { NetWatchApi } from '../services/api';
@@ -28,10 +29,17 @@ interface HubCard {
 const HUB_CARDS: HubCard[] = [
   {
     id: 'overview',
-    title: 'Web UI Modules',
-    description: 'Network canvas, sentinel, alerts, vulnerabilities, and overview dashboards.',
+    title: 'Security Modules',
+    description: 'Overview, sentinel host monitoring, alerts, and vulnerability dashboards.',
     accent: 'from-cyan-500/20 to-cyan-950/20 border-cyan-500/20 text-cyan-300',
     icon: LayoutGrid,
+  },
+  {
+    id: 'network',
+    title: 'Web Terminal',
+    description: 'Full PTY terminal sessions — multi-tab, auto-detected shells, WebSocket I/O.',
+    accent: 'from-green-500/20 to-green-950/20 border-green-500/20 text-green-300',
+    icon: Terminal,
   },
   {
     id: 'api_docs',
