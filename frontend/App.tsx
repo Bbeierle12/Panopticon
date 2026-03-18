@@ -12,6 +12,12 @@ import { SentinelDashboard } from './components/SentinelDashboard';
 import { OverviewDashboard } from './components/OverviewDashboard';
 import { AlertsDashboard } from './components/AlertsDashboard';
 import { VulnerabilitiesWorkspace } from './components/VulnerabilitiesWorkspace';
+import { HubDashboard } from './components/HubDashboard';
+import { DataExplorer } from './components/DataExplorer';
+import { LogsViewer } from './components/LogsViewer';
+import { SystemStatus } from './components/SystemStatus';
+import { ConfigurationView } from './components/ConfigurationView';
+import { ExportView } from './components/ExportView';
 
 import { useNetwork } from './hooks/useNetwork';
 import { useScanner } from './hooks/useScanner';
@@ -23,7 +29,7 @@ export default function NetworkMapper() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoveredConnection, setHoveredConnection] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [activeModule, setActiveModule] = useState<AppModule>('overview');
+  const [activeModule, setActiveModule] = useState<AppModule>('hub');
 
   // Custom Hooks for Logic Separation
   const { 
@@ -160,6 +166,7 @@ export default function NetworkMapper() {
             </>
           ) : (
             <div className="flex-1 overflow-hidden">
+              {activeModule === 'hub' ? <HubDashboard onSelectModule={setActiveModule} /> : null}
               {activeModule === 'overview' ? <OverviewDashboard onSelectModule={setActiveModule} /> : null}
               {activeModule === 'desktop_safety' ? (
                 <SentinelDashboard
@@ -169,6 +176,11 @@ export default function NetworkMapper() {
               ) : null}
               {activeModule === 'vulnerabilities' ? <VulnerabilitiesWorkspace /> : null}
               {activeModule === 'alerts' ? <AlertsDashboard /> : null}
+              {activeModule === 'data_explorer' ? <DataExplorer /> : null}
+              {activeModule === 'logs' ? <LogsViewer /> : null}
+              {activeModule === 'system_status' ? <SystemStatus /> : null}
+              {activeModule === 'configuration' ? <ConfigurationView /> : null}
+              {activeModule === 'export' ? <ExportView /> : null}
             </div>
           )}
         </div>

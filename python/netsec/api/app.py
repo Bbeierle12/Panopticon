@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from netsec.core.config import get_settings
 from netsec.core.events import Event, EventBus, EventType
@@ -17,6 +20,8 @@ from netsec.api.websocket import register_ws_forwarding
 from netsec.services.monitoring_service import MonitoringService
 from netsec.sentinel.alerts import ingest_raw_alerts
 from netsec.adapters.base import ToolStatus
+
+_FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -199,8 +204,9 @@ def create_app() -> FastAPI:
     from netsec.api.routers import (
         system, tools, scans, devices, alerts,
         scheduler, vulnerabilities, traffic, ws, terminal, sentinel,
-        overview, metadata,
+        overview, metadata, hub, config_api, logs, export,
     )
+    app.include_router(hub.router, prefix="/api/hub", tags=["hub"])
     app.include_router(overview.router, prefix="/api/overview", tags=["overview"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
@@ -213,6 +219,21 @@ def create_app() -> FastAPI:
     app.include_router(terminal.router, prefix="/api/terminal", tags=["terminal"])
     app.include_router(sentinel.router, prefix="/api/sentinel", tags=["sentinel"])
     app.include_router(metadata.router, prefix="/api/metadata", tags=["metadata"])
+    app.include_router(config_api.router, prefix="/api/config", tags=["config"])
+    app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+    app.include_router(export.router, prefix="/api/export", tags=["export"])
     app.include_router(ws.router)
+
+    # Serve frontend SPA (must be after API routers)
+    if _FRONTEND_DIR.is_dir():
+        app.mount("/assets", StaticFiles(directory=_FRONTEND_DIR / "assets"), name="static")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def _spa_fallback(full_path: str) -> FileResponse:
+            """Serve index.html for all non-API routes (SPA client-side routing)."""
+            file = _FRONTEND_DIR / full_path
+            if file.is_file():
+                return FileResponse(file)
+            return FileResponse(_FRONTEND_DIR / "index.html")
 
     return app

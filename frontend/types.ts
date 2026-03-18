@@ -262,4 +262,37 @@ export interface TerminalTab {
   title: string;
 }
 
-export type AppModule = 'overview' | 'network' | 'desktop_safety' | 'vulnerabilities' | 'alerts';
+export type AppModule = 'hub' | 'overview' | 'network' | 'desktop_safety' | 'vulnerabilities' | 'alerts' | 'data_explorer' | 'logs' | 'system_status' | 'configuration' | 'export';
+
+// ============ Hub types ============
+
+export interface HubStatus {
+  timestamp: string;
+  health: { status: string; version: string };
+  counts: {
+    alerts: number;
+    devices: number;
+    scans: number;
+    vulnerabilities: number;
+  };
+  tools: Array<{ name: string; status: string }>;
+  adapters: Array<{ name: string; display_name: string; status: string }>;
+  scheduler_jobs: Array<{ name: string; trigger_type: string; next_run?: string }>;
+  ws_clients: number;
+}
+
+export interface ConfigResponse {
+  config: Record<string, unknown>;
+  source: {
+    default: string;
+    local: string;
+    local_exists: boolean;
+  };
+}
+
+export interface LogFileResponse {
+  file: string;
+  exists: boolean;
+  total_lines: number;
+  lines: string[];
+}

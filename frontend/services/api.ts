@@ -6,6 +6,9 @@ import {
   ApiToolInfo,
   ApiVulnerability,
   AlertStats,
+  ConfigResponse,
+  HubStatus,
+  LogFileResponse,
   ScanCreateParams,
   SentinelCollectResult,
   SentinelCorrelationResult,
@@ -298,6 +301,72 @@ export class NetWatchApi {
   static async getSystemInfo(): Promise<Record<string, unknown>> {
     const res = await fetch(`${API_BASE}/system/info`, { headers: this.getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch system info');
+    return res.json();
+  }
+
+  // ============ Hub ============
+
+  static async getHubStatus(): Promise<HubStatus> {
+    const res = await fetch(`${API_BASE}/hub/status`, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch hub status');
+    return res.json();
+  }
+
+  // ============ Config ============
+
+  static async getConfig(): Promise<ConfigResponse> {
+    const res = await fetch(`${API_BASE}/config`, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch config');
+    return res.json();
+  }
+
+  static async getConfigRaw(): Promise<{ default_toml: string; local_toml: string }> {
+    const res = await fetch(`${API_BASE}/config/raw`, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch raw config');
+    return res.json();
+  }
+
+  static async updateConfig(overrides: Record<string, unknown>): Promise<{ status: string; note: string }> {
+    const res = await fetch(`${API_BASE}/config`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify(overrides),
+    });
+    if (!res.ok) throw new Error('Failed to update config');
+    return res.json();
+  }
+
+  // ============ Logs ============
+
+  static async getLogs(params?: { lines?: number; offset?: number }): Promise<LogFileResponse> {
+    const query = new URLSearchParams();
+    if (params?.lines) query.set('lines', String(params.lines));
+    if (params?.offset) query.set('offset', String(params.offset));
+    const url = `${API_BASE}/logs/file${query.toString() ? '?' + query : ''}`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch logs');
+    return res.json();
+  }
+
+  // ============ Export ============
+
+  static async exportResource(resource: string, format: 'csv' | 'json' = 'csv', limit = 10000): Promise<void> {
+    const url = `${API_BASE}/export/${resource}?fmt=${format}&limit=${limit}`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to export');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = res.headers.get('content-disposition')?.split('filename="')[1]?.replace('"', '') || `${resource}.${format}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ============ Scheduler ============
+
+  static async getSchedulerJobs(): Promise<Array<{ name: string; trigger_type: string; next_run?: string }>> {
+    const res = await fetch(`${API_BASE}/scheduler/jobs`, { headers: this.getHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch scheduler jobs');
     return res.json();
   }
 
