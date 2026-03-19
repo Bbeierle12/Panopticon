@@ -73,6 +73,21 @@ class DeviceService:
         for port_data in host_data.get("ports", []):
             await self._upsert_port(device, port_data)
 
+        # Infer device_type if not already set
+        if not device.device_type:
+            device.device_type = _infer_device_type(
+                ip=device.ip_address,
+                hostname=device.hostname,
+                vendor=device.vendor,
+                os_family=device.os_family,
+                ports=host_data.get("ports", []),
+            )
+            if device.device_type:
+                logger.info(
+                    "Inferred device_type=%s for %s (%s)",
+                    device.device_type, device.ip_address, device.hostname,
+                )
+
         await self.session.flush()
 
         await self.event_bus.publish(Event(
@@ -141,6 +156,29 @@ class DeviceService:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def reclassify_all(self) -> int:
+        """Re-run device type inference on all devices with no type set."""
+        devices = await self.list_devices(limit=1000)
+        updated = 0
+        for device in devices:
+            if not device.device_type:
+                ports = [
+                    {"port": p.port_number, "service": p.service_name}
+                    for p in device.ports
+                ]
+                device.device_type = _infer_device_type(
+                    ip=device.ip_address,
+                    hostname=device.hostname,
+                    vendor=device.vendor,
+                    os_family=device.os_family,
+                    ports=ports,
+                )
+                if device.device_type:
+                    updated += 1
+        await self.session.flush()
+        logger.info("Reclassified %d devices", updated)
+        return updated
+
     async def _upsert_port(self, device: Device, port_data: dict[str, Any]) -> Port:
         port_num = port_data.get("port", 0)
         protocol = port_data.get("protocol", "tcp")
@@ -173,3 +211,74 @@ class DeviceService:
             if port_data.get("version"):
                 existing.service_version = port_data["version"]
             return existing
+
+
+def _infer_device_type(
+    ip: str,
+    hostname: str | None,
+    vendor: str | None,
+    os_family: str | None,
+    ports: list[dict[str, Any]],
+) -> str | None:
+    """Infer device type from IP, hostname, vendor, OS, and open ports."""
+    h = (hostname or "").lower()
+    v = (vendor or "").lower()
+    os_f = (os_family or "").lower()
+    open_ports = {p.get("port", 0) for p in ports if p.get("state", "open") == "open"}
+    services = {(p.get("service") or "").lower() for p in ports}
+
+    # ── Gateway: .1 or .254 ──
+    if ip.rsplit(".", 1)[-1] in ("1", "254"):
+        return "router"
+
+    # ── Router / mesh / gateway patterns ──
+    if any(kw in h for kw in ("gateway", "router", "orbi", "rbe9", "rbs", "rbr")):
+        return "router"
+    if any(kw in v for kw in ("netgear", "orbi", "arris", "asus rt", "linksys", "ubiquiti")):
+        if ip.rsplit(".", 1)[-1] in ("1", "254"):
+            return "router"
+        return "router"  # mesh nodes are routers too
+
+    # ── Extender / access point ──
+    if any(kw in h for kw in ("extender", "repeater", "tl-wa", "tl-wr", "re505", "re450", "eap")):
+        return "extender"
+    if any(kw in v for kw in ("tp-link",)):
+        return "extender"
+
+    # ── IoT / cameras / smart home ──
+    if any(kw in h for kw in (
+        "ring", "cam", "nest", "hue", "echo", "alexa", "sonos", "roku",
+        "chromecast", "firestick", "doorbell", "thermostat", "arlo",
+        "wemo", "smartthings", "tuya", "wyze",
+    )):
+        return "iot"
+
+    # ── Mobile ──
+    if any(kw in h for kw in ("ipad", "iphone", "pixel", "galaxy", "samsung", "android")):
+        return "mobile"
+    if "apple" in v and any(kw in h for kw in ("ipad", "iphone")):
+        return "mobile"
+
+    # ── Workstation / laptop ──
+    if any(kw in h for kw in (
+        "thinkpad", "macbook", "imac", "desktop", "laptop", "dell", "lenovo",
+        "surface", "hp-", "acer", "asus-",
+    )):
+        return "workstation"
+    if any(kw in os_f for kw in ("windows", "linux", "macos", "ubuntu", "debian", "fedora")):
+        return "workstation"
+
+    # ── Server (by ports) ──
+    server_ports = {22, 80, 443, 3306, 5432, 8080, 8443, 3000, 5000, 9090}
+    if len(open_ports & server_ports) >= 3:
+        return "server"
+    if any(kw in h for kw in ("server", "nas", "plex", "proxmox", "esxi", "truenas", "unraid")):
+        return "server"
+
+    # ── Printer ──
+    if any(kw in h for kw in ("printer", "hp-", "epson", "canon", "brother")):
+        return "iot"
+    if 631 in open_ports or 9100 in open_ports or "ipp" in services:
+        return "iot"
+
+    return None

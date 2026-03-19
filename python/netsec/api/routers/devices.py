@@ -27,6 +27,15 @@ async def list_devices(
     return [DeviceOut.model_validate(d) for d in devices]
 
 
+@router.post("/reclassify")
+async def reclassify_devices(
+    service: DeviceService = Depends(_get_device_service),
+) -> dict:
+    """Re-run device type inference on all unclassified devices."""
+    count = await service.reclassify_all()
+    return {"reclassified": count}
+
+
 @router.get("/{device_id}", response_model=DeviceOut)
 async def get_device(
     device_id: str,

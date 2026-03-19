@@ -143,6 +143,11 @@ impl PtySession {
     pub fn reader(&self) -> Arc<Mutex<Box<dyn Read + Send>>> {
         Arc::clone(&self.reader)
     }
+
+    /// Get a clone of the writer for async writing.
+    pub fn writer(&self) -> Arc<Mutex<Box<dyn Write + Send>>> {
+        Arc::clone(&self.writer)
+    }
 }
 
 impl std::fmt::Debug for PtySession {

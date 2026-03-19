@@ -313,6 +313,19 @@ pub fn view<'a>(
     .padding([6, 12])
     .style(theme::secondary_button_style);
 
+    // Browsing metrics button
+    let browsing_btn = button(
+        row![
+            text("\u{1F310}").size(12), // 🌐
+            Space::with_width(6),
+            text("BROWSING").size(10),
+        ]
+        .align_y(Alignment::Center)
+    )
+    .on_press(Message::ShowBrowsingDashboard)
+    .padding([6, 12])
+    .style(theme::secondary_button_style);
+
     // Tools button
     let tools_btn = button(
         row![
@@ -400,6 +413,8 @@ pub fn view<'a>(
         scans_btn,
         Space::with_width(4),
         traffic_btn,
+        Space::with_width(4),
+        browsing_btn,
         Space::with_width(4),
         tools_btn,
         Space::with_width(4),

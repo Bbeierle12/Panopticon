@@ -96,6 +96,10 @@ class Adapter(BaseAdapter):
 
         match task:
             case "quick_scan":
+                # Host discovery + top 100 ports + service detection for device classification
+                return f"{base} -F -sV --version-intensity 2 -T4 {target}"
+            case "discovery":
+                # Ping sweep only (no port scan)
                 return f"{base} -sn {target}"
             case "full_scan":
                 return f"{base} -sV -O -A {target}"

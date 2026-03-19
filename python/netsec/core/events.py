@@ -34,6 +34,12 @@ class EventType(StrEnum):
     TOOL_OFFLINE = "tool.offline"
     # Metadata events
     METADATA_EXTRACTED = "metadata.extracted"
+    # Browsing metrics events
+    BROWSING_DNS_QUERY = "browsing.dns_query"
+    BROWSING_TLS_HANDSHAKE = "browsing.tls_handshake"
+    BROWSING_SUSPICIOUS_DOMAIN = "browsing.suspicious_domain"
+    BROWSING_BEACON_DETECTED = "browsing.beacon_detected"
+    BROWSING_METRICS_UPDATE = "browsing.metrics_update"
     # System events
     SYSTEM_STARTUP = "system.startup"
     SYSTEM_SHUTDOWN = "system.shutdown"

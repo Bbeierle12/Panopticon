@@ -320,6 +320,95 @@ pub struct JobCreate {
 }
 
 // ============================================================================
+// Browsing Metrics
+// ============================================================================
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowsingRealtime {
+    pub dns_qps: f64,
+    pub active_connections: u32,
+    pub bandwidth_up: i64,
+    pub bandwidth_down: i64,
+    pub total_dns_queries: u64,
+    pub total_tls: u64,
+    pub total_http: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DnsTopDomain {
+    pub domain: String,
+    pub count: u64,
+    pub is_suspicious: bool,
+    pub threat_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DnsQueryType {
+    pub rrtype: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SuspiciousDomain {
+    pub domain: String,
+    pub entropy: f64,
+    pub threat_source: String,
+    pub first_seen: String,
+    pub query_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BeaconDetection {
+    pub src_ip: String,
+    pub dst_ip: String,
+    pub dst_port: u16,
+    pub interval_secs: f64,
+    pub jitter: f64,
+    pub connection_count: u32,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TlsVersionCount {
+    pub version: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProtocolDist {
+    pub protocol: String,
+    pub bytes_total: i64,
+    pub percentage: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrafficDestination {
+    pub destination: String,
+    pub bytes_total: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowsingEvent {
+    pub timestamp: String,
+    pub event_type: String,
+    pub summary: String,
+    pub is_suspicious: bool,
+}
+
+/// Composite browsing data fetched in one batch.
+#[derive(Debug, Clone)]
+pub struct BrowsingData {
+    pub realtime: BrowsingRealtime,
+    pub top_domains: Vec<DnsTopDomain>,
+    pub suspicious_domains: Vec<SuspiciousDomain>,
+    pub query_types: Vec<DnsQueryType>,
+    pub tls_versions: Vec<TlsVersionCount>,
+    pub protocols: Vec<ProtocolDist>,
+    pub beacons: Vec<BeaconDetection>,
+    pub recent_events: Vec<BrowsingEvent>,
+}
+
+// ============================================================================
 // API Error
 // ============================================================================
 

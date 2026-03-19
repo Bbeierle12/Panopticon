@@ -7,7 +7,7 @@ use netsec_pty::ShellInfo;
 use uuid::Uuid;
 
 use crate::api::{
-    self, Alert, AlertStats, Device, Scan, ScheduledJob, Tool, ToolHealth,
+    self, Alert, AlertStats, BrowsingData, Device, Scan, ScheduledJob, Tool, ToolHealth,
     TrafficFlow, Vulnerability, WsEvent, WsState,
 };
 
@@ -249,6 +249,13 @@ pub enum Message {
     /// Load a project
     LoadProject,
 
+    // === Keyboard ===
+    /// Keyboard input event
+    KeyboardInput {
+        key: iced::keyboard::Key,
+        modifiers: iced::keyboard::Modifiers,
+    },
+
     // === UI Panels ===
     /// Toggle the terminal panel visibility
     ToggleTerminalPanel,
@@ -260,6 +267,14 @@ pub enum Message {
     ShowVulnDashboard,
     /// Hide the vulnerability dashboard
     HideVulnDashboard,
+    /// Show browsing metrics dashboard
+    ShowBrowsingDashboard,
+    /// Hide browsing metrics dashboard
+    HideBrowsingDashboard,
+    /// Browsing data fetched
+    BrowsingDataFetched(Result<BrowsingData, String>),
+    /// Fetch browsing data
+    FetchBrowsingData,
     /// Change inspector tab
     SetInspectorTab(InspectorTab),
 

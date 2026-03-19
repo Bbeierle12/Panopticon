@@ -96,6 +96,10 @@ pub struct NetWatch {
     selected_scan_id: Option<String>,
     /// Scan filter by status
     scan_filter_status: Option<String>,
+    /// Whether the browsing metrics dashboard is visible
+    show_browsing_dashboard: bool,
+    /// Browsing metrics data
+    browsing_data: Option<api::BrowsingData>,
     /// Whether the traffic dashboard modal is visible
     show_traffic_dashboard: bool,
     /// Selected traffic flow ID
@@ -240,6 +244,8 @@ impl NetWatch {
                 show_scans_dashboard: false,
                 selected_scan_id: None,
                 scan_filter_status: None,
+                show_browsing_dashboard: false,
+                browsing_data: None,
                 show_traffic_dashboard: false,
                 selected_traffic_id: None,
                 traffic_filter_protocol: None,
@@ -553,6 +559,20 @@ impl NetWatch {
                 Task::none()
             }
 
+            // === Keyboard input → forward to active terminal ===
+            Message::KeyboardInput { key, modifiers } => {
+                if self.terminal_visible {
+                    if let Some(tab) = self.terminal.active_tab() {
+                        let tab_id = tab.id;
+                        let input = key_event_to_terminal_input(&key, &modifiers);
+                        if !input.is_empty() {
+                            return self.terminal.write_input(tab_id, &input);
+                        }
+                    }
+                }
+                Task::none()
+            }
+
             // === Network Canvas messages ===
             Message::NodeSelected(id) | Message::DeviceSelected(id) => {
                 self.network.select_node(id);
@@ -778,6 +798,57 @@ impl NetWatch {
             }
             Message::SetInspectorTab(tab) => {
                 self.inspector_tab = tab;
+                Task::none()
+            }
+
+            // === Browsing Metrics Dashboard ===
+            Message::ShowBrowsingDashboard => {
+                self.show_browsing_dashboard = true;
+                Task::done(Message::FetchBrowsingData)
+            }
+            Message::HideBrowsingDashboard => {
+                self.show_browsing_dashboard = false;
+                Task::none()
+            }
+            Message::FetchBrowsingData => {
+                if let Some(ref client) = self.api_client {
+                    let api = client.clone();
+                    Task::perform(
+                        async move {
+                            let realtime = api.browsing_realtime().await.map_err(|e| e.to_string())?;
+                            let top_domains = api.browsing_top_domains(50).await.unwrap_or_default();
+                            let suspicious = api.browsing_suspicious_domains().await.unwrap_or_default();
+                            let query_types = api.browsing_query_types().await.unwrap_or_default();
+                            let tls_versions = api.browsing_tls_versions().await.unwrap_or_default();
+                            let protocols = api.browsing_protocols().await.unwrap_or_default();
+                            let beacons = api.browsing_beacons().await.unwrap_or_default();
+                            let events = api.browsing_recent_events(100).await.unwrap_or_default();
+                            Ok::<_, String>(api::BrowsingData {
+                                realtime,
+                                top_domains,
+                                suspicious_domains: suspicious,
+                                query_types,
+                                tls_versions,
+                                protocols,
+                                beacons,
+                                recent_events: events,
+                            })
+                        },
+                        Message::BrowsingDataFetched,
+                    )
+                } else {
+                    Task::none()
+                }
+            }
+            Message::BrowsingDataFetched(result) => {
+                match result {
+                    Ok(data) => {
+                        self.browsing_data = Some(data);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to fetch browsing data: {}", e);
+                    }
+                }
                 Task::none()
             }
 
@@ -1094,6 +1165,11 @@ impl NetWatch {
 
                 if let Some(scan_id) = self.active_scan_id.clone() {
                     tasks.push(Task::done(Message::FetchScan(scan_id)));
+                }
+
+                // Auto-refresh browsing metrics every 5 ticks (5 seconds)
+                if self.show_browsing_dashboard {
+                    tasks.push(Task::done(Message::FetchBrowsingData));
                 }
 
                 // Retry webview creation if not yet initialized
@@ -2178,7 +2254,7 @@ impl NetWatch {
                     service_version: p.service_version.clone(),
                 }).collect();
             } else {
-                // Create new node
+                // Create new node — classify by explicit type, then heuristics
                 let node_type = match api_device.device_type.as_deref() {
                     Some("router") => NodeType::Router,
                     Some("server") => NodeType::Server,
@@ -2189,7 +2265,7 @@ impl NetWatch {
                     Some("iot") | Some("camera") | Some("sensor") => NodeType::IoT,
                     Some("ap") | Some("access_point") | Some("extender") => NodeType::Extender,
                     Some("cloud") => NodeType::Cloud,
-                    _ => NodeType::Workstation, // Default
+                    _ => infer_device_type(&api_device.ip_address, api_device.hostname.as_deref(), api_device.vendor.as_deref()),
                 };
 
                 // Temporary position - radial layout applied after all nodes added
@@ -2372,6 +2448,21 @@ impl NetWatch {
                 .push(main_layout)
                 .push(scans_dashboard)
                 .into()
+        } else if self.show_browsing_dashboard {
+            let browsing_dashboard = views::browsing::view(
+                self.browsing_data.as_ref(),
+            );
+
+            Stack::new()
+                .push(main_layout)
+                .push(
+                    container(browsing_dashboard)
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill)
+                )
+                .into()
         } else if self.show_traffic_dashboard {
             let traffic_dashboard = views::traffic::view(
                 &self.api_state.traffic,
@@ -2450,6 +2541,11 @@ impl NetWatch {
                     iced::Event::Window(iced::window::Event::Resized(size)) => {
                         Some(Message::WindowResized(size.width as u32, size.height as u32))
                     }
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                        key, modifiers, ..
+                    }) => {
+                        Some(Message::KeyboardInput { key, modifiers })
+                    }
                     _ => None,
                 }
             }),
@@ -2491,4 +2587,159 @@ impl Default for WsState {
     fn default() -> Self {
         WsState::Disconnected
     }
+}
+
+/// Infer device type from IP, hostname, and vendor when no explicit type is set.
+fn infer_device_type(
+    ip: &str,
+    hostname: Option<&str>,
+    vendor: Option<&str>,
+) -> crate::message::NodeType {
+    use crate::message::NodeType;
+
+    // Gateway IP heuristic: .1 or .254 on the subnet is almost always the router
+    if let Some(last_octet) = ip.rsplit('.').next().and_then(|s| s.parse::<u8>().ok()) {
+        if last_octet == 1 || last_octet == 254 {
+            return NodeType::Router;
+        }
+    }
+
+    let h = hostname.unwrap_or("").to_ascii_lowercase();
+    let v = vendor.unwrap_or("").to_ascii_lowercase();
+
+    // Router / mesh node patterns (Orbi, Netgear, Arris)
+    if h.contains("orbi")
+        || h.starts_with("rbe9")
+        || h.starts_with("rbs")
+        || h.starts_with("rbr")
+        || h.contains("gateway")
+        || v.contains("netgear")
+        || v.contains("orbi")
+        || v.contains("arris")
+    {
+        return NodeType::Router;
+    }
+
+    // Extender / access point patterns
+    if h.starts_with("tl-wa")
+        || h.starts_with("tl-wr")
+        || h.contains("re505")
+        || h.contains("re450")
+        || h.contains("extender")
+        || h.contains("repeater")
+        || h.contains("eap")
+        || v.contains("tp-link")
+    {
+        return NodeType::Extender;
+    }
+
+    // IoT / camera patterns
+    if h.contains("ring")
+        || h.contains("cam")
+        || h.contains("nest")
+        || h.contains("hue")
+        || h.contains("echo")
+        || h.contains("alexa")
+        || h.contains("sonos")
+        || h.contains("roku")
+        || h.contains("chromecast")
+        || h.contains("firestick")
+    {
+        return NodeType::IoT;
+    }
+
+    // Mobile patterns
+    if h.contains("ipad")
+        || h.contains("iphone")
+        || h.contains("pixel")
+        || h.contains("galaxy")
+        || h.contains("samsung")
+        || h.contains("android")
+    {
+        return NodeType::Mobile;
+    }
+
+    // Workstation patterns
+    if h.contains("thinkpad")
+        || h.contains("macbook")
+        || h.contains("desktop")
+        || h.contains("laptop")
+        || h.contains("dell")
+        || h.contains("lenovo")
+    {
+        return NodeType::Workstation;
+    }
+
+    // Server patterns
+    if h.contains("server")
+        || h.contains("nas")
+        || h.contains("plex")
+        || h.contains("proxmox")
+        || h.contains("esxi")
+    {
+        return NodeType::Server;
+    }
+
+    NodeType::Workstation // Final fallback
+}
+
+/// Convert an iced keyboard event into terminal escape sequence bytes.
+fn key_event_to_terminal_input(
+    key: &iced::keyboard::Key,
+    modifiers: &iced::keyboard::Modifiers,
+) -> String {
+    use iced::keyboard::key::Named;
+    use iced::keyboard::Key;
+
+    // Ctrl+key combos
+    if modifiers.control() {
+        if let Key::Character(ch) = key {
+            let c = ch.chars().next().unwrap_or('\0');
+            if c.is_ascii_alphabetic() {
+                let ctrl = (c.to_ascii_lowercase() as u8) - b'a' + 1;
+                return String::from(ctrl as char);
+            }
+        }
+    }
+
+    // Named keys → escape sequences
+    if let Key::Named(named) = key {
+        return match named {
+            Named::Enter => "\r".into(),
+            Named::Backspace => "\x7f".into(),
+            Named::Tab => "\t".into(),
+            Named::Escape => "\x1b".into(),
+            Named::ArrowUp => "\x1b[A".into(),
+            Named::ArrowDown => "\x1b[B".into(),
+            Named::ArrowRight => "\x1b[C".into(),
+            Named::ArrowLeft => "\x1b[D".into(),
+            Named::Home => "\x1b[H".into(),
+            Named::End => "\x1b[F".into(),
+            Named::PageUp => "\x1b[5~".into(),
+            Named::PageDown => "\x1b[6~".into(),
+            Named::Insert => "\x1b[2~".into(),
+            Named::Delete => "\x1b[3~".into(),
+            Named::F1 => "\x1bOP".into(),
+            Named::F2 => "\x1bOQ".into(),
+            Named::F3 => "\x1bOR".into(),
+            Named::F4 => "\x1bOS".into(),
+            Named::F5 => "\x1b[15~".into(),
+            Named::F6 => "\x1b[17~".into(),
+            Named::F7 => "\x1b[18~".into(),
+            Named::F8 => "\x1b[19~".into(),
+            Named::F9 => "\x1b[20~".into(),
+            Named::F10 => "\x1b[21~".into(),
+            Named::F11 => "\x1b[23~".into(),
+            Named::F12 => "\x1b[24~".into(),
+            Named::Space => " ".into(),
+            _ => String::new(),
+        };
+    }
+
+    // Regular character input from Key::Character
+    if let Key::Character(ch) = key {
+        return ch.to_string();
+    }
+
+    String::new()
 }

@@ -1,6 +1,7 @@
 //! UI view modules.
 
 pub mod alerts;
+pub mod browsing;
 pub mod canvas;
 pub mod header;
 pub mod inspector;

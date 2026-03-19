@@ -18,6 +18,7 @@ from netsec.db.session import init_db, close_db, get_session_context
 from netsec.adapters.registry import AdapterRegistry
 from netsec.api.websocket import register_ws_forwarding
 from netsec.services.monitoring_service import MonitoringService
+from netsec.services.browsing_service import BrowsingService
 from netsec.sentinel.alerts import ingest_raw_alerts
 from netsec.adapters.base import ToolStatus
 
@@ -152,6 +153,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             task_params={},
         )
 
+    # Start browsing metrics service (tails Suricata eve.json)
+    browsing_service = BrowsingService(event_bus)
+    await browsing_service.start()
+    app.state.browsing_service = browsing_service
+
     # Publish system startup event
     await event_bus.publish(Event(
         type=EventType.SYSTEM_STARTUP,
@@ -169,6 +175,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ))
 
     # Shutdown
+    await browsing_service.stop()
     await scheduler.stop()
     await registry.shutdown_all()
     await event_bus.stop()
@@ -204,7 +211,7 @@ def create_app() -> FastAPI:
     from netsec.api.routers import (
         system, tools, scans, devices, alerts,
         scheduler, vulnerabilities, traffic, ws, terminal, sentinel,
-        overview, metadata, hub, config_api, logs, export,
+        overview, metadata, hub, config_api, logs, export, browsing,
     )
     app.include_router(hub.router, prefix="/api/hub", tags=["hub"])
     app.include_router(overview.router, prefix="/api/overview", tags=["overview"])
@@ -222,6 +229,7 @@ def create_app() -> FastAPI:
     app.include_router(config_api.router, prefix="/api/config", tags=["config"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
     app.include_router(export.router, prefix="/api/export", tags=["export"])
+    app.include_router(browsing.router, prefix="/api/browsing", tags=["browsing"])
     app.include_router(ws.router)
 
     # Serve frontend SPA (must be after API routers)

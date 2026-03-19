@@ -476,6 +476,55 @@ impl ApiClient {
             .await?;
         self.handle_response(resp).await
     }
+
+    // ========================================================================
+    // Browsing Metrics
+    // ========================================================================
+
+    pub async fn browsing_realtime(&self) -> Result<BrowsingRealtime, ApiError> {
+        let resp = self.client.get(self.url("/browsing/realtime")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_top_domains(&self, limit: u32) -> Result<Vec<DnsTopDomain>, ApiError> {
+        let resp = self.client.get(self.url(&format!("/browsing/dns/top-domains?limit={}", limit))).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_suspicious_domains(&self) -> Result<Vec<SuspiciousDomain>, ApiError> {
+        let resp = self.client.get(self.url("/browsing/dns/suspicious")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_query_types(&self) -> Result<Vec<DnsQueryType>, ApiError> {
+        let resp = self.client.get(self.url("/browsing/dns/query-types")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_tls_versions(&self) -> Result<Vec<TlsVersionCount>, ApiError> {
+        let resp = self.client.get(self.url("/browsing/traffic/tls-versions")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_protocols(&self) -> Result<Vec<ProtocolDist>, ApiError> {
+        let resp = self.client.get(self.url("/browsing/traffic/protocols")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_top_destinations(&self, limit: u32) -> Result<Vec<TrafficDestination>, ApiError> {
+        let resp = self.client.get(self.url(&format!("/browsing/traffic/top-destinations?limit={}", limit))).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_beacons(&self) -> Result<Vec<BeaconDetection>, ApiError> {
+        let resp = self.client.get(self.url("/browsing/security/beacons")).send().await?;
+        self.handle_response(resp).await
+    }
+
+    pub async fn browsing_recent_events(&self, limit: u32) -> Result<Vec<BrowsingEvent>, ApiError> {
+        let resp = self.client.get(self.url(&format!("/browsing/events/recent?limit={}", limit))).send().await?;
+        self.handle_response(resp).await
+    }
 }
 
 #[cfg(test)]

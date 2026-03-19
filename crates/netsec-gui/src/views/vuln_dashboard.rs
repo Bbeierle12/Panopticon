@@ -174,7 +174,7 @@ pub fn view<'a>(
         )
         .on_press(Message::HideVulnDashboard)
         .padding([8, 12])
-        .style(|theme, status| {
+        .style(|_theme: &iced::Theme, status| {
             let mut style = iced::widget::button::Style {
                 background: Some(Background::Color(Color::TRANSPARENT)),
                 text_color: colors::TEXT_MUTED,

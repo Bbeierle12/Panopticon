@@ -79,7 +79,7 @@ fn view_details<'a>(node: &'a Node, network: &'a NetworkState) -> Element<'a, Me
         crate::message::NodeStatus::Offline => colors::TEXT_MUTED,
     };
 
-    let status_text = match node.status {
+    let _status_text = match node.status {
         crate::message::NodeStatus::Online => "ONLINE",
         crate::message::NodeStatus::Warning => "WARNING",
         crate::message::NodeStatus::Compromised => "COMPROMISED",

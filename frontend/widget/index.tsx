@@ -165,6 +165,7 @@ function NetworkCanvasWidget() {
   const [isPanning, setIsPanning] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
   const [dragState, setDragState] = useState<{ nodeId: string; startX: number; startY: number } | null>(null);
+  const didDragRef = useRef(false);
 
   // Apply a network state update to React state
   const applyState = useCallback((state: NetworkStateJson, source: string) => {
@@ -224,6 +225,7 @@ function NetworkCanvasWidget() {
   // Mouse handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) { // Left click
+      didDragRef.current = false;
       if (e.shiftKey || e.ctrlKey) {
         // Start selection box
         setSelectionBox({
@@ -239,6 +241,7 @@ function NetworkCanvasWidget() {
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isPanning) {
+      didDragRef.current = true;
       const dx = e.movementX / zoom;
       const dy = e.movementY / zoom;
       setPan(p => ({ x: p.x + dx, y: p.y + dy }));
@@ -268,19 +271,24 @@ function NetworkCanvasWidget() {
   }, [isPanning, selectionBox, dragState, zoom, nodes]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    const wasDrag = didDragRef.current;
     if (isPanning) {
       setIsPanning(false);
+      // Only deselect if this was a clean click (no movement), not a pan
+      if (!wasDrag && e.target === svgRef.current) {
+        setSelectedIds([]);
+        postToRust({ type: 'NodeDeselected' });
+      }
     } else if (selectionBox) {
-      // Calculate selected nodes within box
-      // TODO: implement selection box node detection
       setSelectionBox(null);
     } else if (dragState) {
       setDragState(null);
-    } else if (!dragState && e.target === svgRef.current) {
-      // Clicked on background - deselect
+    } else if (e.target === svgRef.current) {
+      // Clean click on background - deselect
       setSelectedIds([]);
       postToRust({ type: 'NodeDeselected' });
     }
+    didDragRef.current = false;
   }, [isPanning, selectionBox, dragState]);
 
   const handleNodeDown = useCallback((e: React.MouseEvent, id: string) => {
